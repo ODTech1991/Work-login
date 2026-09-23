@@ -1,0 +1,61 @@
+const KEY="myworklog_pwa_v1";
+const DEFAULT={profile:{name:"My Work"},employers:[],sessions:[],settings:{currency:"₹"}};
+let db=load(), page="home", tick=null;
+function load(){try{return {...DEFAULT,...JSON.parse(localStorage.getItem(KEY)||"{}")}}catch{return structuredClone(DEFAULT)}}
+function save(){localStorage.setItem(KEY,JSON.stringify(db))}
+function id(){return crypto.randomUUID?crypto.randomUUID():Date.now()+Math.random()}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function emp(id){return db.employers.find(e=>e.id===id)}
+function active(){return db.sessions.find(s=>!s.out)}
+function dateNow(){return new Date().toLocaleDateString("en-CA")}
+function minutes(a,b){return Math.max(0,Math.floor((new Date(b)-new Date(a))/60000))}
+function net(s){return (s.out?minutes(s.in,s.out):minutes(s.in,new Date()))-(s.breakMinutes||0)}
+function hm(n){return `${Math.floor(Math.max(0,n)/60)}h ${String(Math.max(0,n)%60).padStart(2,"0")}m`}
+function money(n){return `${db.settings.currency||"₹"}${Number(n||0).toFixed(2)}`}
+function toast(t){let x=document.getElementById("toast");x.textContent=t;x.classList.add("show");setTimeout(()=>x.classList.remove("show"),2200)}
+function sheet(h){document.getElementById("sheetbox").innerHTML=h;document.getElementById("sheet").classList.remove("hidden")}
+function closeSheet(){document.getElementById("sheet").classList.add("hidden")}
+function render(){
+ try{
+  document.querySelectorAll(".nav").forEach(x=>x.classList.toggle("active",x.dataset.p===page));
+  ({home,employers,attendance,reports,settings}[page]||home)();
+  if(tick)clearInterval(tick);
+  if(active())tick=setInterval(()=>{if(page==="home")home()},1000);
+ }catch(e){document.getElementById("app").innerHTML=`<div class="card"><h2>MyWorkLog</h2><p>Could not load the dashboard.</p><p class="muted">${esc(e.message)}</p><button class="btn primary full" onclick="localStorage.removeItem('${KEY}');location.reload()">Reset App Data</button></div>`}
+}
+function home(){
+ let a=active(), today=dateNow(), rows=db.sessions.filter(s=>s.date===today), mins=rows.reduce((z,s)=>z+net(s),0);
+ let earn=rows.reduce((z,s)=>z+net(s)/60*(+emp(s.employerId)?.rate||0),0);
+ document.getElementById("app").innerHTML=`<section class="hero"><h1>Hello, ${esc(db.profile.name||"there")} 👋</h1><p>${new Date().toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p></section>
+ ${a?`<section class="card working"><span class="badge">CURRENTLY WORKING</span><h2>${esc(emp(a.employerId)?.name||"Employer")}</h2><div class="muted">Started ${new Date(a.in).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</div><div class="timer">${hm(net(a))}</div><div class="actions"><button class="btn soft" onclick="breakStart()">☕ Break</button><button class="btn red" onclick="checkOut()">Check Out</button></div></section>`:
+ `<section class="card"><div class="title" style="margin-top:0">Ready to work?</div><button class="btn primary full" onclick="checkIn()">＋ CHECK IN</button></section>`}
+ <div class="grid"><div class="card stat"><small>Today's Hours</small><b>${hm(mins)}</b></div><div class="card stat"><small>Today's Earnings</small><b>${money(earn)}</b></div></div>
+ <div class="title">Today's Work</div><section class="card">${rows.length?rows.slice().reverse().map(row).join(""):`<div class="empty">No attendance recorded today.</div>`}</section>`;
+}
+function row(s){let e=emp(s.employerId);return `<div class="list"><div><b>${esc(e?.name||"Unknown")}</b><div class="muted">${new Date(s.in).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})} – ${s.out?new Date(s.out).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"Working"}</div></div><b>${hm(net(s))}</b></div>`}
+function checkIn(){
+ if(active()){toast("Finish your current session first.");return}
+ if(!db.employers.length){addEmployer();return}
+ sheet(`<h2>Check In</h2><label>Employer</label><select id="ci">${db.employers.filter(e=>e.active!==false).map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}</select><label>Note</label><textarea id="cinote" placeholder="Optional note"></textarea><div class="actions"><button class="btn soft" onclick="closeSheet()">Cancel</button><button class="btn primary" onclick="doIn()">Check In</button></div>`)
+}
+function doIn(){let s={id:id(),employerId:ci.value,date:dateNow(),in:new Date().toISOString(),out:null,breakMinutes:0,note:cinote.value,breakStart:null};db.sessions.push(s);save();closeSheet();toast("Checked in — saved on this phone");render()}
+function breakStart(){let a=active();if(!a)return;if(a.breakStart){a.breakMinutes+=(Date.now()-new Date(a.breakStart))/60000;a.breakStart=null;save();toast("Break ended")}else{a.breakStart=new Date().toISOString();save();toast("Break started")}render()}
+function checkOut(){let a=active();if(!a)return;if(a.breakStart){a.breakMinutes+=minutes(a.breakStart,new Date());a.breakStart=null}sheet(`<h2>Check Out</h2><p><b>${esc(emp(a.employerId)?.name||"Employer")}</b></p><p>Net working time: <b>${hm(net(a))}</b></p><label>Note</label><textarea id="conote">${esc(a.note||"")}</textarea><div class="actions"><button class="btn soft" onclick="closeSheet()">Cancel</button><button class="btn red" onclick="doOut()">Confirm</button></div>`)}
+function doOut(){let a=active();a.out=new Date().toISOString();a.note=conote.value;save();closeSheet();toast("Attendance saved");render()}
+function addEmployer(e=null){sheet(`<h2>${e?"Edit Employer":"Add Employer"}</h2><label>Employer / Company Name</label><input id="ename" value="${esc(e?.name||"")}" placeholder="ABC Enterprises"><label>Job / Role</label><input id="erole" value="${esc(e?.role||"")}" placeholder="Accountant"><label>Payment Type</label><select id="etype"><option value="hourly" ${e?.type==="hourly"||!e?"selected":""}>Hourly</option><option value="daily" ${e?.type==="daily"?"selected":""}>Daily</option><option value="fixed" ${e?.type==="fixed"?"selected":""}>Fixed</option></select><label>Rate</label><input id="erate" type="number" min="0" value="${e?.rate||0}"><div class="actions"><button class="btn soft" onclick="closeSheet()">Cancel</button><button class="btn primary" onclick="saveEmployer('${e?.id||""}')">Save</button></div>`)}
+function saveEmployer(eid){let e={id:eid||id(),name:ename.value.trim(),role:erole.value.trim(),type:etype.value,rate:+erate.value||0,active:true};if(!e.name){toast("Enter employer name");return}let i=db.employers.findIndex(x=>x.id===e.id);i<0?db.employers.push(e):db.employers[i]={...db.employers[i],...e};save();closeSheet();render();toast("Employer saved")}
+function employers(){document.getElementById("app").innerHTML=`<div class="actions" style="justify-content:space-between"><div><h2>Employers</h2><div class="muted">Your part-time jobs</div></div><button class="btn primary" onclick="addEmployer()">＋ Add</button></div>${db.employers.length?db.employers.map(e=>`<section class="card"><div class="list"><div><b>${esc(e.name)}</b><div class="muted">${esc(e.role||"")} • ${e.type==="hourly"?money(e.rate)+"/hr":e.type==="daily"?money(e.rate)+"/day":money(e.rate)}</div></div><span class="badge">${e.active!==false?"ACTIVE":"OFF"}</span></div><div class="actions"><button class="btn soft" onclick='addEmployer(${JSON.stringify(e).replaceAll("'","&#39;")})'>Edit</button><button class="btn soft" onclick="toggleEmp('${e.id}')">${e.active!==false?"Deactivate":"Activate"}</button></div></section>`).join(""):`<section class="card empty">Add your first employer to start.</section>`}`}
+function toggleEmp(id){let e=emp(id);e.active=e.active===false;save();render()}
+function attendance(){document.getElementById("app").innerHTML=`<div class="actions" style="justify-content:space-between"><div><h2>Attendance</h2><div class="muted">All saved records</div></div><button class="btn primary" onclick="checkIn()">＋ Check In</button></div><section class="card"><label>Employer</label><select id="af" onchange="attendance()"><option value="">All Employers</option>${db.employers.map(e=>`<option value="${e.id}" ${window._af===e.id?"selected":""}>${esc(e.name)}</option>`).join("")}</select></section><section class="card table">${db.sessions.slice().filter(s=>!window._af||s.employerId===window._af).sort((a,b)=>b.in.localeCompare(a.in)).map(s=>`<table><tr><th>Date</th><th>Employer</th><th>Hours</th></tr><tr><td>${s.date}</td><td>${esc(emp(s.employerId)?.name||"")}</td><td>${hm(net(s))}</td></tr></table>`).join("")||`<div class="empty">No attendance records.</div>`}</section>`;let el=document.getElementById("af");el.onchange=()=>{window._af=el.value;attendance()}}
+function reports(){let m=new Date().toLocaleDateString("en-CA").slice(0,7), rows=db.sessions.filter(s=>s.date.startsWith(m)), mins=rows.reduce((z,s)=>z+net(s),0), earn=rows.reduce((z,s)=>z+net(s)/60*(+emp(s.employerId)?.rate||0),0);document.getElementById("app").innerHTML=`<h2>Reports</h2><div class="muted">${new Date().toLocaleDateString(undefined,{month:"long",year:"numeric"})}</div><div class="grid"><div class="card stat"><small>Total Hours</small><b>${hm(mins)}</b></div><div class="card stat"><small>Sessions</small><b>${rows.length}</b></div><div class="card stat"><small>Days Worked</small><b>${new Set(rows.map(s=>s.date)).size}</b></div><div class="card stat"><small>Est. Earnings</small><b>${money(earn)}</b></div></div><div class="title">Data</div><section class="card"><div class="actions"><button class="btn primary" onclick="csv()">Export CSV</button><button class="btn soft" onclick="backup()">Backup</button></div></section>`}
+function settings(){document.getElementById("app").innerHTML=`<h2>Settings</h2><section class="card"><label>Your Name</label><input id="pn" value="${esc(db.profile.name)}"><label>Currency</label><input id="cur" value="${esc(db.settings.currency)}"><div class="actions"><button class="btn primary" onclick="saveSettings()">Save</button></div></section><section class="card"><h3>Local Data</h3><p class="muted">Your attendance stays in this browser on this device. Nothing is uploaded.</p><div class="actions"><button class="btn soft" onclick="backup()">Backup JSON</button><button class="btn soft" onclick="restore()">Restore</button></div><div class="actions"><button class="btn red" onclick="wipe()">Delete All Data</button></div></section>`}
+function saveSettings(){db.profile.name=pn.value.trim()||"My Work";db.settings.currency=cur.value||"₹";save();render();toast("Saved")}
+function csv(){let r=[["Date","Employer","Check In","Check Out","Break Minutes","Net Minutes","Rate","Estimated Earnings"]];db.sessions.forEach(s=>{let e=emp(s.employerId),n=net(s);r.push([s.date,e?.name||"",new Date(s.in).toLocaleString(),s.out?new Date(s.out).toLocaleString():"",Math.round(s.breakMinutes||0),n,e?.rate||0,n/60*(e?.rate||0)])});let out=r.map(x=>x.map(v=>`"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");download("myworklog.csv","text/csv",out)}
+function backup(){download("myworklog-backup.json","application/json",JSON.stringify(db,null,2))}
+function restore(){let i=document.createElement("input");i.type="file";i.accept=".json";i.onchange=()=>{let f=i.files[0],r=new FileReader();r.onload=()=>{try{let x=JSON.parse(r.result);if(!Array.isArray(x.sessions)||!Array.isArray(x.employers))throw Error();db=x;save();render();toast("Backup restored")}catch{toast("Invalid backup")}};r.readAsText(f)};i.click()}
+function wipe(){if(confirm("Delete all MyWorkLog data from this device?")){localStorage.removeItem(KEY);location.reload()}}
+function download(n,t,d){let a=document.createElement("a");a.href=URL.createObjectURL(new Blob([d],{type:t}));a.download=n;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>{page=b.dataset.p;render()});
+document.getElementById("lock").onclick=()=>toast("App Lock can be added later");
+if("serviceWorker" in navigator) window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+render();
